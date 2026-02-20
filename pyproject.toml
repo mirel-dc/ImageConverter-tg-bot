@@ -1,0 +1,18 @@
+[project]
+name = "image-converter-bot"
+version = "0.1.0"
+description = "Telegram-бот для конвертации изображений"
+readme = "PLAN.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.0",
+    "Pillow>=10.0",
+    "pymupdf>=1.23",
+    "img2pdf>=0.5",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

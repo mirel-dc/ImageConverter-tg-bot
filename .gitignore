@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# Environment variables
+.env
+.env.local
+
+# Data
+data/
+
+# T-Bank converter outputs
+tbank_converter/*.xlsx
+tbank_converter/**/__pycache__/
+tbank_converter/*.egg-info/
+src/*.xlsx
+src/**/*.xlsx
+
+# UV cache
+.uv_cache/
+
+# Personal configs (keep only default.yaml in repo)
+src/configs/*.yaml
+!src/configs/default.yaml
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+.claude/
+.idea/
+
+Sofya.yaml
+Valery.yaml
