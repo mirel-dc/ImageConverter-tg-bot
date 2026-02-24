@@ -1,0 +1,10 @@
+src/.venv
+src/**/__pycache__
+.git
+.github
+.gitignore
+.env
+.env.example
+*.md
+Makefile
+tests/
