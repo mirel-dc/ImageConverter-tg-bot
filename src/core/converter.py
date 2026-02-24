@@ -5,9 +5,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.config import DEFAULT_DPI, DEFAULT_ICO_SIZES, DEFAULT_PDF_MODE, DEFAULT_QUALITY
+from core.settings import settings
 from core.image_converter import (
     handle_zip_input,
+    process_jpeg_to_avif,
     process_jpeg_to_ico,
     process_jpeg_to_pdf,
     process_jpeg_to_webp,
@@ -22,10 +23,10 @@ async def convert(file_path: Path, task: str, options: dict) -> Path:
 
 def _convert_sync(file_path: Path, task: str, options: dict) -> Path:
     input_path = Path(file_path)
-    quality = int(options.get("quality", DEFAULT_QUALITY))
-    dpi = int(options.get("dpi", DEFAULT_DPI))
-    pdf_mode = options.get("pdf_mode", DEFAULT_PDF_MODE)
-    ico_sizes = options.get("ico_sizes", DEFAULT_ICO_SIZES)
+    quality = int(options.get("quality", settings.default_quality))
+    dpi = int(options.get("dpi", settings.default_dpi))
+    pdf_mode = options.get("pdf_mode", settings.default_pdf_mode)
+    ico_sizes = options.get("ico_sizes", settings.default_ico_sizes)
 
     if isinstance(ico_sizes, str):
         ico_sizes = [int(size) for size in ico_sizes.split(",") if size.strip()]
@@ -56,6 +57,8 @@ def _convert_sync(file_path: Path, task: str, options: dict) -> Path:
                     result = process_jpeg_to_ico(temp_input, ico_sizes)
                 elif task == "jpeg-to-webp":
                     result = process_jpeg_to_webp(temp_input, quality)
+                elif task == "jpeg-to-avif":
+                    result = process_jpeg_to_avif(temp_input, quality)
                 else:
                     raise RuntimeError("Неизвестная задача конвертации")
         except RuntimeError:

@@ -4,20 +4,18 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from dotenv import load_dotenv
 
-from bot.config import BOT_TOKEN
 from bot.handlers import router
+from core.settings import settings
 
 
 async def main() -> None:
-    load_dotenv()
-    if not BOT_TOKEN:
+    if not settings.bot_token:
         raise RuntimeError("Не задан BOT_TOKEN в .env")
 
     logging.basicConfig(level=logging.INFO)
 
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(token=settings.bot_token)
     dp = Dispatcher()
     dp.include_router(router)
 

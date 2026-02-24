@@ -5,21 +5,44 @@ import logging
 import tempfile
 from pathlib import Path
 
-from aiogram import Bot, F, Router
+from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.config import CONVERT_TIMEOUT_SECONDS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES
-from core.config import DEFAULT_DPI, DEFAULT_ICO_SIZES, DEFAULT_PDF_MODE, DEFAULT_QUALITY
 from core.converter import convert
 from core.image_converter import format_size
+from core.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: callable,
+        event: TelegramObject,
+        data: dict[str, any],
+    ) -> any:
+        if not settings.allowed_users:
+            return await handler(event, data)
+
+        user = data.get("event_from_user")
+        if user and user.id in settings.allowed_users:
+            return await handler(event, data)
+
+        if isinstance(event, Message):
+            await event.answer("У вас нет доступа к этому боту.")
+        elif isinstance(event, CallbackQuery):
+            await event.answer("Доступ запрещен.", show_alert=True)
+        return
+
+
 router = Router()
+router.message.middleware(AccessMiddleware())
+router.callback_query.middleware(AccessMiddleware())
 
 
 class ConvertStates(StatesGroup):
@@ -38,11 +61,13 @@ def build_task_keyboard(file_ext: str) -> InlineKeyboardBuilder:
         kb.button(text="JPEG/PNG → PDF", callback_data="task:jpeg-to-pdf")
         kb.button(text="JPEG/PNG → ICO", callback_data="task:jpeg-to-ico")
         kb.button(text="JPEG/PNG → WebP", callback_data="task:jpeg-to-webp")
+        kb.button(text="JPEG/PNG → AVIF", callback_data="task:jpeg-to-avif")
     elif file_ext == ".zip":
         kb.button(text="PDF → JPEG", callback_data="task:pdf-to-jpeg")
         kb.button(text="JPEG → PDF", callback_data="task:jpeg-to-pdf")
         kb.button(text="JPEG → ICO", callback_data="task:jpeg-to-ico")
         kb.button(text="JPEG → WebP", callback_data="task:jpeg-to-webp")
+        kb.button(text="JPEG → AVIF", callback_data="task:jpeg-to-avif")
     kb.adjust(2)
     return kb
 
@@ -53,7 +78,7 @@ def build_quality_keyboard() -> InlineKeyboardBuilder:
     kb.button(text="75", callback_data="quality:75")
     kb.button(text="95", callback_data="quality:95")
     kb.button(text="100 — по умолчанию", callback_data="quality:100")
-    kb.button(text="По умолчанию", callback_data=f"quality:{DEFAULT_QUALITY}")
+    kb.button(text="По умолчанию", callback_data=f"quality:{settings.default_quality}")
     kb.adjust(2)
     return kb
 
@@ -63,7 +88,7 @@ def build_dpi_keyboard() -> InlineKeyboardBuilder:
     kb.button(text="72", callback_data="dpi:72")
     kb.button(text="150 — по умолчанию", callback_data="dpi:150")
     kb.button(text="300", callback_data="dpi:300")
-    kb.button(text="По умолчанию", callback_data=f"dpi:{DEFAULT_DPI}")
+    kb.button(text="По умолчанию", callback_data=f"dpi:{settings.default_dpi}")
     kb.adjust(2)
     return kb
 
@@ -72,7 +97,7 @@ def build_pdf_mode_keyboard() -> InlineKeyboardBuilder:
     kb = InlineKeyboardBuilder()
     kb.button(text="Один PDF (combine)", callback_data="pdf-mode:combine")
     kb.button(text="По файлу (per-file)", callback_data="pdf-mode:per-file")
-    kb.button(text="По умолчанию", callback_data=f"pdf-mode:{DEFAULT_PDF_MODE}")
+    kb.button(text="По умолчанию", callback_data=f"pdf-mode:{settings.default_pdf_mode}")
     kb.adjust(1)
     return kb
 
@@ -93,7 +118,8 @@ async def cmd_start(message: Message) -> None:
         "• PDF → JPEG (quality, dpi)\n"
         "• JPEG/PNG → PDF (combine/per-file)\n"
         "• JPEG/PNG → ICO (размеры)\n"
-        "• JPEG/PNG → WebP (quality)"
+        "• JPEG/PNG → WebP (quality)\n"
+        "• JPEG/PNG → AVIF (quality)"
     )
     await message.answer(text)
 
@@ -125,10 +151,10 @@ async def document_handler(message: Message, state: FSMContext) -> None:
     if document is None:
         return
 
-    if document.file_size and document.file_size > MAX_DOWNLOAD_BYTES:
+    if document.file_size and document.file_size > settings.max_download_bytes:
         await message.answer(
             f"Файл слишком большой для скачивания: {format_size(document.file_size)}. "
-            f"Максимум {format_size(MAX_DOWNLOAD_BYTES)}."
+            f"Максимум {format_size(settings.max_download_bytes)}."
         )
         return
 
@@ -165,6 +191,11 @@ async def task_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     if task == "jpeg-to-webp":
         await state.set_state(ConvertStates.waiting_for_quality)
         await callback.message.answer("Выберите качество WebP:", reply_markup=build_quality_keyboard().as_markup())
+        return
+
+    if task == "jpeg-to-avif":
+        await state.set_state(ConvertStates.waiting_for_quality)
+        await callback.message.answer("Выберите качество AVIF:", reply_markup=build_quality_keyboard().as_markup())
         return
 
     if task == "jpeg-to-ico":
@@ -215,7 +246,7 @@ async def pdf_mode_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(ConvertStates.waiting_for_ico_sizes, F.data == "ico:default")
 async def ico_default(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await state.update_data(ico_sizes=DEFAULT_ICO_SIZES)
+    await state.update_data(ico_sizes=settings.default_ico_sizes)
     await perform_conversion(callback.message, state)
 
 
@@ -253,10 +284,10 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
         return
 
     options = {
-        "quality": data.get("quality", DEFAULT_QUALITY),
-        "dpi": data.get("dpi", DEFAULT_DPI),
-        "pdf_mode": data.get("pdf_mode", DEFAULT_PDF_MODE),
-        "ico_sizes": data.get("ico_sizes", DEFAULT_ICO_SIZES),
+        "quality": data.get("quality", settings.default_quality),
+        "dpi": data.get("dpi", settings.default_dpi),
+        "pdf_mode": data.get("pdf_mode", settings.default_pdf_mode),
+        "ico_sizes": data.get("ico_sizes", settings.default_ico_sizes),
     }
 
     task = data.get("task")
@@ -276,13 +307,13 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
 
             result_path = await asyncio.wait_for(
                 convert(input_path, task, options),
-                timeout=CONVERT_TIMEOUT_SECONDS,
+                timeout=settings.convert_timeout_seconds,
             )
 
-            if result_path.stat().st_size > MAX_UPLOAD_BYTES:
+            if result_path.stat().st_size > settings.max_upload_bytes:
                 await message.answer(
                     f"Результат слишком большой для отправки: {format_size(result_path.stat().st_size)}. "
-                    f"Максимум {format_size(MAX_UPLOAD_BYTES)}."
+                    f"Максимум {format_size(settings.max_upload_bytes)}."
                 )
                 return
 

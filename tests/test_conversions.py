@@ -117,3 +117,25 @@ def test_png_to_webp(tmp_path: Path) -> None:
 
     with Image.open(webp_path) as img:
         assert img.format == "WEBP"
+
+
+def test_jpeg_to_avif(tmp_path: Path) -> None:
+    img_path = tmp_path / "photo.jpg"
+    create_jpeg(img_path)
+
+    avif_path = tmp_path / "photo.avif"
+    ic.convert_jpeg_to_avif(img_path, avif_path, quality=95)
+
+    with Image.open(avif_path) as img:
+        assert img.format == "AVIF"
+
+
+def test_png_to_avif(tmp_path: Path) -> None:
+    img_path = tmp_path / "photo.png"
+    create_png(img_path)
+
+    avif_path = tmp_path / "photo.png.avif"
+    ic.convert_jpeg_to_avif(img_path, avif_path, quality=95)
+
+    with Image.open(avif_path) as img:
+        assert img.format == "AVIF"

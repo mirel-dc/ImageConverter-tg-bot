@@ -75,6 +75,18 @@ def convert_jpeg_to_webp(src_path: Path, dest_path: Path, quality: int) -> None:
         img.save(dest_path, format="WEBP", quality=quality, method=6)
 
 
+def convert_jpeg_to_avif(src_path: Path, dest_path: Path, quality: int) -> None:
+    require_pillow()
+    try:
+        import pillow_avif  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("Плагин pillow-avif-plugin не установлен.") from exc
+    from PIL import Image
+
+    with Image.open(src_path) as img:
+        img.save(dest_path, format="AVIF", quality=quality)
+
+
 def convert_jpeg_to_ico(src_path: Path, dest_path: Path, sizes: list[int]) -> None:
     require_pillow()
     from PIL import Image
@@ -156,6 +168,24 @@ def process_jpeg_to_webp(input_path: Path, quality: int) -> Path:
         dest = output_dir / relative.with_suffix(".webp")
         ensure_parent(dest)
         convert_jpeg_to_webp(src, dest, quality)
+    return output_dir
+
+
+def process_jpeg_to_avif(input_path: Path, quality: int) -> Path:
+    if input_path.suffix.lower() in SUPPORTED_JPEG:
+        dest = input_path.with_suffix(".avif")
+        convert_jpeg_to_avif(input_path, dest, quality)
+        return dest
+
+    output_dir = build_output_dir(input_path, f"avif_{quality}")
+    jpg_files = collect_jpeg_files(input_path)
+    if not jpg_files:
+        raise RuntimeError("JPEG/PNG файлы не найдены")
+    for src in jpg_files:
+        relative = src.relative_to(input_path)
+        dest = output_dir / relative.with_suffix(".avif")
+        ensure_parent(dest)
+        convert_jpeg_to_avif(src, dest, quality)
     return output_dir
 
 
@@ -249,6 +279,15 @@ def handle_zip_input(input_path: Path, task: str, quality: int, dpi: int, pdf_mo
                 dest = output_dir / relative.with_suffix(".webp")
                 ensure_parent(dest)
                 convert_jpeg_to_webp(src, dest, quality)
+        elif task == "jpeg-to-avif":
+            jpg_files = collect_jpeg_files(extracted_dir)
+            if not jpg_files:
+                raise RuntimeError("JPEG/PNG файлы не найдены в ZIP")
+            for src in jpg_files:
+                relative = src.relative_to(extracted_dir)
+                dest = output_dir / relative.with_suffix(".avif")
+                ensure_parent(dest)
+                convert_jpeg_to_avif(src, dest, quality)
         else:
             raise RuntimeError(f"Неизвестная задача: {task}")
 
