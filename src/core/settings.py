@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     # Limits
     max_download_mb: int = 20
     max_upload_mb: int = 50
-    convert_timeout_seconds: int = 120
+    convert_timeout_seconds: int = 240
+
+    # UX / Progress
+    progress_update_seconds: int = 5
 
     # Converter defaults
     default_quality: int = 100
