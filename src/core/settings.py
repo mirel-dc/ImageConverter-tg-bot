@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     convert_timeout_seconds: int = 240
 
+    # Network (Telegram API / file download/upload)
+    telegram_timeout_seconds: int = 300
+
     # UX / Progress
     progress_update_seconds: int = 5
 

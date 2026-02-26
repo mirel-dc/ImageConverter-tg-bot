@@ -442,13 +442,22 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_root = Path(tmp_dir)
             input_path = temp_root / file_name
-            file = await bot.get_file(file_id)
-            await bot.download(file, destination=input_path)
+            try:
+                file = await bot.get_file(file_id)
+                await bot.download(file, destination=input_path)
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(
+                    "Превышен таймаут скачивания файла из Telegram. "
+                    "Попробуйте ещё раз или отправьте файл меньшего размера."
+                ) from exc
 
-            result_path = await asyncio.wait_for(
-                convert(input_path, task, options),
-                timeout=settings.convert_timeout_seconds,
-            )
+            try:
+                result_path = await asyncio.wait_for(
+                    convert(input_path, task, options),
+                    timeout=settings.convert_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise asyncio.TimeoutError from exc
 
             # Останавливаем прогресс
             progress_running = False
@@ -493,9 +502,13 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
             await updater_task
         except Exception:
             pass
+        timeout_seconds = settings.convert_timeout_seconds
+        timeout_human = (
+            f"{timeout_seconds // 60} мин" if timeout_seconds % 60 == 0 else f"{timeout_seconds} сек"
+        )
         tip = (
-            "Превышен таймаут конвертации. Попробуйте снизить DPI или качество, "
-            "а также уменьшить размер входного файла."
+            f"Превышен таймаут конвертации ({timeout_human}). "
+            "Попробуйте снизить DPI или качество, а также уменьшить размер входного файла."
         )
         if progress_msg is not None:
             try:
