@@ -40,13 +40,66 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} TB"
 
 
+def normalize_zip_member_name(name: str) -> str:
+    """Пытается исправить частый кейс с битой кириллицей в ZIP.
+
+    Иногда ZIP содержит имена в UTF-8, но флаг UTF-8 не выставлен,
+    и при чтении они декодируются как cp437, что даёт "моджибейк" вида "╨...".
+    В таком случае пробуем обратное преобразование: cp437 -> bytes -> utf-8.
+    """
+
+    # Быстрый хинт: такие символы очень характерны для UTF-8, прочитанного как cp437.
+    if "╨" not in name and "╤" not in name:
+        return name
+
+    try:
+        return name.encode("cp437").decode("utf-8")
+    except Exception:
+        return name
+
+
+def is_ignored_zip_member(member_path: Path) -> bool:
+    # macOS metadata
+    if "__MACOSX" in member_path.parts:
+        return True
+    # AppleDouble resource forks
+    if member_path.name.startswith("._"):
+        return True
+    return False
+
+
 def safe_extract_zip(zip_path: Path, extract_dir: Path) -> None:
+    extract_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
         for member in zf.infolist():
-            member_path = Path(member.filename)
+            normalized_name = normalize_zip_member_name(member.filename)
+            member_path = Path(normalized_name)
+
+            if is_ignored_zip_member(member_path):
+                continue
+
             if member_path.is_absolute() or ".." in member_path.parts:
                 raise RuntimeError(f"Небезопасный путь в ZIP: {member.filename}")
-        zf.extractall(extract_dir)
+
+            # Директории могут приходить отдельными записями
+            if member.is_dir() or normalized_name.endswith("/"):
+                (extract_dir / member_path).mkdir(parents=True, exist_ok=True)
+                continue
+
+            dest_path = extract_dir / member_path
+            # Доп. защита от обхода путей (на случай странных разделителей/драйвов)
+            try:
+                resolved_dest = dest_path.resolve()
+                resolved_root = extract_dir.resolve()
+                if resolved_root not in resolved_dest.parents and resolved_dest != resolved_root:
+                    raise RuntimeError(f"Небезопасный путь в ZIP: {member.filename}")
+            except FileNotFoundError:
+                # resolve() может падать, если часть пути не существует; создадим родителя ниже
+                pass
+
+            ensure_parent(dest_path)
+            with zf.open(member, "r") as src, dest_path.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
 
 
 def convert_pdf_to_jpegs(src_path: Path, output_dir: Path, quality: int, dpi: int) -> list[Path]:

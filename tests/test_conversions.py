@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import zipfile
 
 import fitz
 import pytest
@@ -139,3 +140,27 @@ def test_png_to_avif(tmp_path: Path) -> None:
 
     with Image.open(avif_path) as img:
         assert img.format == "AVIF"
+
+
+def test_safe_extract_zip_ignores_macosx_and_appledouble(tmp_path: Path) -> None:
+    zip_path = tmp_path / "input.zip"
+    extract_dir = tmp_path / "extracted"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("__MACOSX/._5.jpg", b"")
+        zf.writestr("__MACOSX/5.jpg", b"not-an-image")
+        zf.writestr("Новая папка/._6.jpg", b"")
+        zf.writestr("Новая папка/6.jpg", b"ok")
+
+    ic.safe_extract_zip(zip_path, extract_dir)
+
+    assert not (extract_dir / "__MACOSX").exists()
+    assert not (extract_dir / "Новая папка" / "._6.jpg").exists()
+    assert (extract_dir / "Новая папка" / "6.jpg").exists()
+
+
+def test_normalize_zip_member_name_fixes_mojibake_for_cyrillic() -> None:
+    original = "Новая папка/5.jpg"
+    mojibake = original.encode("utf-8").decode("cp437")
+    assert ic.normalize_zip_member_name(mojibake) == original
