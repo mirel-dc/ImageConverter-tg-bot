@@ -17,16 +17,13 @@ RUN apt-get update \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Create app directory
-WORKDIR /app
+WORKDIR /app/src
 
 # Copy project files
 # Copy only what is needed first for better layer caching
-COPY src/pyproject.toml src/uv.lock src/.python-version ./src/
+COPY pyproject.toml uv.lock .python-version ./
 # Then copy the source code
-COPY src ./src
-
-# Default working directory is the src folder where pyproject.toml resides
-WORKDIR /app/src
+COPY . ./
 
 # Pre-download dependencies into a virtualenv for faster startups (optional)
 # This will create .venv inside /app/src

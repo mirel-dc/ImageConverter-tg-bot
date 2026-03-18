@@ -69,6 +69,8 @@ def build_task_keyboard(file_ext: str) -> InlineKeyboardBuilder:
         kb.button(text="JPG/PNG → WebP", callback_data="task:jpeg-to-webp")
         kb.button(text="JPG/PNG → AVIF", callback_data="task:jpeg-to-avif")
     kb.adjust(2)
+    kb.button(text="❌ Отмена", callback_data="post:reset")
+    kb.adjust(2, 1)
     return kb
 
 
@@ -79,9 +81,11 @@ def build_quality_keyboard() -> InlineKeyboardBuilder:
     kb.button(text="75 — баланс", callback_data="quality:75")
     kb.button(text="85 — хорошее", callback_data="quality:85")
     kb.button(text="95 — почти без потерь", callback_data="quality:95")
-    default_text = "100 — по умолчанию" if settings.default_quality == 100 else "100"
-    kb.button(text=default_text, callback_data="quality:100")
+    kb.button(text="100 — по умолчанию" if settings.default_quality == 100 else "100", callback_data="quality:100")
     kb.adjust(2)
+    kb.button(text="⬅️ Назад", callback_data="back:task")
+    kb.button(text="❌ Отмена", callback_data="post:reset")
+    kb.adjust(2, 2)
     return kb
 
 
@@ -92,6 +96,9 @@ def build_dpi_keyboard() -> InlineKeyboardBuilder:
     kb.button(text=default_text, callback_data="dpi:150")
     kb.button(text="300", callback_data="dpi:300")
     kb.adjust(2)
+    kb.button(text="⬅️ Назад", callback_data="back:quality")
+    kb.button(text="❌ Отмена", callback_data="post:reset")
+    kb.adjust(2, 2)
     return kb
 
 
@@ -104,6 +111,9 @@ def build_pdf_mode_keyboard() -> InlineKeyboardBuilder:
     kb.button(text=combine_text, callback_data="pdf-mode:combine")
     kb.button(text=per_file_text, callback_data="pdf-mode:per-file")
     kb.adjust(1)
+    kb.button(text="⬅️ Назад", callback_data="back:task")
+    kb.button(text="❌ Отмена", callback_data="post:reset")
+    kb.adjust(1, 2)
     return kb
 
 
@@ -112,6 +122,9 @@ def build_ico_keyboard() -> InlineKeyboardBuilder:
     kb.button(text="Стандартные размеры", callback_data="ico:default")
     kb.button(text="Указать вручную", callback_data="ico:custom")
     kb.adjust(1)
+    kb.button(text="⬅️ Назад", callback_data="back:task")
+    kb.button(text="❌ Отмена", callback_data="post:reset")
+    kb.adjust(1, 2)
     return kb
 
 
@@ -306,10 +319,38 @@ async def ico_custom_sizes(message: Message, state: FSMContext) -> None:
     await perform_conversion(message, state)
 
 
+@router.callback_query(F.data.startswith("back:"))
+async def back_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    dest = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    file_ext = data.get("file_ext", "")
+    task = data.get("task", "")
+
+    if dest == "task":
+        await state.set_state(ConvertStates.waiting_for_task)
+        await callback.message.edit_text("Что сделать с файлом?", reply_markup=build_task_keyboard(file_ext).as_markup())
+    elif dest == "quality":
+        await state.set_state(ConvertStates.waiting_for_quality)
+        label = "качество"
+        if task == "pdf-to-jpeg":
+            label = "качество JPG"
+        elif task == "jpeg-to-webp":
+            label = "качество WebP"
+        elif task == "jpeg-to-avif":
+            label = "качество AVIF"
+        await callback.message.edit_text(f"Выберите {label}:", reply_markup=build_quality_keyboard().as_markup())
+
+
 @router.callback_query(F.data == "post:reset")
 async def post_reset(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
+    if callback.message:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
     await callback.message.answer("Сбросил контекст. Отправьте новый файл (PDF/JPG/PNG/ZIP).")
 
 
@@ -413,9 +454,19 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
             dots = 0
             while progress_running:
                 fmt = output_format(task, file_name)
+                # Показываем текущие параметры
+                params_str = f"Quality: {options['quality']}"
+                if task == "pdf-to-jpeg":
+                    params_str += f", DPI: {options['dpi']}"
+                elif task == "jpeg-to-pdf":
+                    params_str = f"Mode: {options['pdf_mode']}"
+                elif task == "jpeg-to-ico":
+                    params_str = f"Sizes: {options['ico_sizes']}"
+
                 text = (
                     f"⌛ Конвертирую ({pretty_task(task)})\n"
-                    f"Формат результата: **{fmt}**\n\n"
+                    f"Формат результата: **{fmt}**\n"
+                    f"Параметры: `{params_str}`\n\n"
                     "Пожалуйста, подождите — после конвертации начнётся загрузка файла" + "." * dots
                 )
                 if progress_msg is None:
@@ -442,10 +493,12 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_root = Path(tmp_dir)
             input_path = temp_root / file_name
+            logger.info(f"Starting conversion for user {message.from_user.id if message.from_user else 'unknown'}: {file_name} -> {task}")
             try:
                 file = await bot.get_file(file_id)
                 await bot.download(file, destination=input_path)
             except asyncio.TimeoutError as exc:
+                logger.error(f"Download timeout for user {message.from_user.id if message.from_user else 'unknown'}")
                 raise RuntimeError(
                     "Превышен таймаут скачивания файла из Telegram. "
                     "Попробуйте ещё раз или отправьте файл меньшего размера."
@@ -456,8 +509,13 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
                     convert(input_path, task, options),
                     timeout=settings.convert_timeout_seconds,
                 )
+                logger.info(f"Conversion success: {result_path.name}")
             except asyncio.TimeoutError as exc:
+                logger.warning(f"Conversion timeout: {task}")
                 raise asyncio.TimeoutError from exc
+            except Exception as exc:
+                logger.error(f"Conversion error: {exc}")
+                raise
 
             # Останавливаем прогресс
             progress_running = False

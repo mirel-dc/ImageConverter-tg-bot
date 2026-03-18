@@ -14,7 +14,11 @@ async def main() -> None:
     if not settings.bot_token:
         raise RuntimeError("Не задан BOT_TOKEN в .env")
 
-    logging.basicConfig(level=logging.INFO)
+    # logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
     # aiogram expects `AiohttpSession.timeout` to be a number (seconds).
     # Passing `aiohttp.ClientTimeout` breaks polling timeout calculations.

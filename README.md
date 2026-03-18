@@ -41,6 +41,12 @@ cd src
 uv run pytest ../tests/
 ```
 
+Для E2E тестирования сложных сценариев (например, ZIP-архивы с вложенными папками или смешанным контентом) используйте:
+```
+cd src
+uv run pytest ../tests/test_e2e_scenarios.py
+```
+
 ### Вариант B — Docker Compose
 Требования: Docker и Docker Compose.
 
