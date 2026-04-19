@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # UX / Progress
     progress_update_seconds: int = 5
 
+    # Albums / media groups
+    album_latency_seconds: float = 1.2
+    album_max_files: int = 10
+
     # Converter defaults
     default_quality: int = 100
     default_dpi: int = 150

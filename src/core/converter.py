@@ -8,6 +8,7 @@ from pathlib import Path
 from core.settings import settings
 from core.image_converter import (
     handle_zip_input,
+    process_jpeg_compress,
     process_jpeg_to_avif,
     process_jpeg_to_ico,
     process_jpeg_to_pdf,
@@ -59,6 +60,8 @@ def _convert_sync(file_path: Path, task: str, options: dict) -> Path:
                     result = process_jpeg_to_webp(temp_input, quality)
                 elif task == "jpeg-to-avif":
                     result = process_jpeg_to_avif(temp_input, quality)
+                elif task == "jpeg-compress":
+                    result = process_jpeg_compress(temp_input, quality)
                 else:
                     raise RuntimeError("Неизвестная задача конвертации")
         except RuntimeError:

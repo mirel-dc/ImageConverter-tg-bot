@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 SUPPORTED_JPEG = {".jpg", ".jpeg", ".png"}
+JPEG_ONLY = {".jpg", ".jpeg"}
 
 
 def require_pillow():
@@ -140,6 +141,16 @@ def convert_jpeg_to_avif(src_path: Path, dest_path: Path, quality: int) -> None:
         img.save(dest_path, format="AVIF", quality=quality)
 
 
+def compress_jpeg(src_path: Path, dest_path: Path, quality: int) -> None:
+    require_pillow()
+    from PIL import Image
+
+    with Image.open(src_path) as img:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img.save(dest_path, format="JPEG", quality=quality, optimize=True)
+
+
 def convert_jpeg_to_ico(src_path: Path, dest_path: Path, sizes: list[int]) -> None:
     require_pillow()
     from PIL import Image
@@ -242,6 +253,24 @@ def process_jpeg_to_avif(input_path: Path, quality: int) -> Path:
     return output_dir
 
 
+def process_jpeg_compress(input_path: Path, quality: int) -> Path:
+    if input_path.suffix.lower() in JPEG_ONLY:
+        dest = input_path.with_name(f"{input_path.stem}_compressed.jpg")
+        compress_jpeg(input_path, dest, quality)
+        return dest
+
+    output_dir = build_output_dir(input_path, f"compressed_{quality}")
+    jpg_files = [p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in JPEG_ONLY]
+    if not jpg_files:
+        raise RuntimeError("JPEG файлы не найдены")
+    for src in jpg_files:
+        relative = src.relative_to(input_path)
+        dest = output_dir / relative.with_suffix(".jpg")
+        ensure_parent(dest)
+        compress_jpeg(src, dest, quality)
+    return output_dir
+
+
 def process_jpeg_to_ico(input_path: Path, sizes: list[int]) -> Path:
     if input_path.suffix.lower() in SUPPORTED_JPEG:
         dest = input_path.with_suffix(".ico")
@@ -332,6 +361,15 @@ def handle_zip_input(input_path: Path, task: str, quality: int, dpi: int, pdf_mo
                 dest = output_dir / relative.with_suffix(".webp")
                 ensure_parent(dest)
                 convert_jpeg_to_webp(src, dest, quality)
+        elif task == "jpeg-compress":
+            jpg_files = [p for p in extracted_dir.rglob("*") if p.is_file() and p.suffix.lower() in JPEG_ONLY]
+            if not jpg_files:
+                raise RuntimeError("JPEG файлы не найдены в ZIP")
+            for src in jpg_files:
+                relative = src.relative_to(extracted_dir)
+                dest = output_dir / relative.with_suffix(".jpg")
+                ensure_parent(dest)
+                compress_jpeg(src, dest, quality)
         elif task == "jpeg-to-avif":
             jpg_files = collect_jpeg_files(extracted_dir)
             if not jpg_files:
@@ -355,7 +393,7 @@ def main():
     parser.add_argument(
         "--task",
         required=True,
-        choices=["pdf-to-jpeg", "jpeg-to-pdf", "jpeg-to-ico", "jpeg-to-webp"],
+        choices=["pdf-to-jpeg", "jpeg-to-pdf", "jpeg-to-ico", "jpeg-to-webp", "jpeg-to-avif", "jpeg-compress"],
         help="Тип конвертации",
     )
     parser.add_argument("--quality", type=int, default=85, help="Качество 1-100 (по умолчанию 85)")
@@ -396,6 +434,10 @@ def main():
                 result = process_jpeg_to_ico(input_path, ico_sizes)
             elif args.task == "jpeg-to-webp":
                 result = process_jpeg_to_webp(input_path, args.quality)
+            elif args.task == "jpeg-to-avif":
+                result = process_jpeg_to_avif(input_path, args.quality)
+            elif args.task == "jpeg-compress":
+                result = process_jpeg_compress(input_path, args.quality)
             else:
                 raise RuntimeError(f"Неизвестная задача: {args.task}")
     except RuntimeError as exc:

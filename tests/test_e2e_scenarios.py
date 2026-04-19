@@ -139,6 +139,69 @@ def test_zip_with_nested_folders(tmp_path: Path) -> None:
     assert (result_path / "folder" / "subfolder" / "nested.webp").exists()
 
 
+def test_album_combine_pdf(tmp_path: Path) -> None:
+    staging = tmp_path / "album"
+    staging.mkdir()
+    for i in range(1, 4):
+        create_jpeg(staging / f"photo_{i:03d}.jpg", size=(128, 128))
+
+    zip_path = tmp_path / "album.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for f in sorted(staging.iterdir()):
+            zf.write(f, f.name)
+
+    result = ic.handle_zip_input(
+        zip_path, task="jpeg-to-pdf", quality=85, dpi=150, pdf_mode="combine", ico_sizes=[16, 32]
+    )
+
+    assert result.is_file() and result.suffix == ".zip"
+    with zipfile.ZipFile(result, "r") as zf:
+        pdfs = [n for n in zf.namelist() if n.endswith(".pdf")]
+        assert len(pdfs) == 1
+        extracted = tmp_path / "out.pdf"
+        extracted.write_bytes(zf.read(pdfs[0]))
+    with fitz.open(extracted) as doc:
+        assert doc.page_count == 3
+
+
+def test_jpeg_compress_single_file_is_smaller(tmp_path: Path) -> None:
+    src = tmp_path / "original.jpg"
+    img = Image.new("RGB", (512, 512), (200, 100, 50))
+    img.save(src, format="JPEG", quality=100)
+    original_size = src.stat().st_size
+
+    result = ic.process_jpeg_compress(src, quality=40)
+
+    assert result.is_file()
+    assert result.suffix == ".jpg"
+    assert result.stat().st_size < original_size
+    with Image.open(result) as out:
+        assert out.format == "JPEG"
+
+
+def test_zip_with_jpeg_compress_skips_png(tmp_path: Path) -> None:
+    zip_path = tmp_path / "mixed.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        jpg_path = tmp_path / "keep.jpg"
+        create_jpeg(jpg_path, size=(256, 256))
+        zf.write(jpg_path, "keep.jpg")
+
+        png_path = tmp_path / "skip.png"
+        create_png(png_path)
+        zf.write(png_path, "skip.png")
+
+    result_path = ic.handle_zip_input(
+        zip_path, task="jpeg-compress", quality=50, dpi=150, pdf_mode="combine", ico_sizes=[16, 32]
+    )
+
+    assert result_path.is_file() and result_path.suffix == ".zip"
+    with zipfile.ZipFile(result_path, "r") as zf:
+        names = zf.namelist()
+    assert "keep.jpg" in names
+    assert "skip.png" not in names
+    assert "skip.jpg" not in names
+
+
 def test_zip_with_mixed_content_ignores_unsupported(tmp_path: Path) -> None:
     zip_path = tmp_path / "mixed.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:

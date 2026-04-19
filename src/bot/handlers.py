@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+import zipfile
 from pathlib import Path
 
 from aiogram import BaseMiddleware, Bot, F, Router
@@ -12,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message, TelegramObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.album_middleware import AlbumMiddleware
 from core.converter import convert
 from core.image_converter import format_size
 from core.settings import settings
@@ -41,6 +43,7 @@ class AccessMiddleware(BaseMiddleware):
 
 
 router = Router()
+router.message.middleware(AlbumMiddleware(latency=settings.album_latency_seconds))
 router.message.middleware(AccessMiddleware())
 router.callback_query.middleware(AccessMiddleware())
 
@@ -62,12 +65,15 @@ def build_task_keyboard(file_ext: str) -> InlineKeyboardBuilder:
         kb.button(text="JPG/PNG → ICO", callback_data="task:jpeg-to-ico")
         kb.button(text="JPG/PNG → WebP", callback_data="task:jpeg-to-webp")
         kb.button(text="JPG/PNG → AVIF", callback_data="task:jpeg-to-avif")
+        if file_ext in {".jpg", ".jpeg"}:
+            kb.button(text="JPG → сжать", callback_data="task:jpeg-compress")
     elif file_ext == ".zip":
         kb.button(text="PDF → JPG", callback_data="task:pdf-to-jpeg")
         kb.button(text="JPG/PNG → PDF", callback_data="task:jpeg-to-pdf")
         kb.button(text="JPG/PNG → ICO", callback_data="task:jpeg-to-ico")
         kb.button(text="JPG/PNG → WebP", callback_data="task:jpeg-to-webp")
         kb.button(text="JPG/PNG → AVIF", callback_data="task:jpeg-to-avif")
+        kb.button(text="JPG → сжать", callback_data="task:jpeg-compress")
     kb.adjust(2)
     kb.button(text="❌ Отмена", callback_data="post:reset")
     kb.adjust(2, 1)
@@ -147,7 +153,8 @@ async def cmd_start(message: Message) -> None:
         "• JPG/PNG → PDF (один файл / отдельные)\n"
         "• JPG/PNG → ICO (размеры)\n"
         "• JPG/PNG → WebP (качество)\n"
-        "• JPG/PNG → AVIF (качество)\n\n"
+        "• JPG/PNG → AVIF (качество)\n"
+        "• JPG → сжать (качество)\n\n"
         "💡 Совет: если отправить изображение как «Фото», Telegram может сжать его.\n"
         "Чтобы сохранить качество — отправляйте как **Файл**."
     )
@@ -165,6 +172,93 @@ async def cmd_help(message: Message) -> None:
         "DPI (presets): 72 / 150 (по умолчанию) / 300."
     )
     await message.answer(text)
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+
+
+def _zip_album_staging(staging_dir: Path, zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for file_path in sorted(staging_dir.iterdir()):
+            if file_path.is_file():
+                zf.write(file_path, file_path.name)
+
+
+def _extract_album_files(album: list[Message]) -> tuple[list[dict] | None, str]:
+    files: list[dict] = []
+    for i, msg in enumerate(album, start=1):
+        if msg.photo:
+            photo = msg.photo[-1]
+            files.append({
+                "file_id": photo.file_id,
+                "name": f"photo_{i:03d}.jpg",
+                "ext": ".jpg",
+                "size": photo.file_size or 0,
+            })
+        elif msg.document:
+            doc = msg.document
+            name = doc.file_name or f"file_{i:03d}"
+            ext = Path(name).suffix.lower()
+            files.append({
+                "file_id": doc.file_id,
+                "name": name,
+                "ext": ext,
+                "size": doc.file_size or 0,
+            })
+    if not files:
+        return None, ""
+
+    exts = {f["ext"] for f in files}
+    if exts.issubset(IMAGE_EXTS):
+        normalized = ".jpg"
+    elif exts == {".pdf"}:
+        normalized = ".pdf"
+    else:
+        return None, ""
+    return files, normalized
+
+
+@router.message(F.media_group_id)
+async def album_handler(message: Message, state: FSMContext, album: list[Message] | None = None) -> None:
+    if not album:
+        return
+
+    files, normalized_ext = _extract_album_files(album)
+    if not files:
+        await message.answer(
+            "Альбом со смешанными типами не поддерживается. "
+            "Отправьте ZIP-архив или разделите на группы одного типа."
+        )
+        return
+
+    if len(files) > settings.album_max_files:
+        await message.answer(
+            f"Слишком много файлов в альбоме ({len(files)}). Максимум: {settings.album_max_files}."
+        )
+        return
+
+    total_size = sum(f["size"] for f in files)
+    if total_size > settings.max_download_bytes:
+        await message.answer(
+            f"Альбом слишком большой: {format_size(total_size)}. "
+            f"Максимум {format_size(settings.max_download_bytes)}."
+        )
+        return
+
+    await state.update_data(
+        batch=True,
+        files=files,
+        file_name=f"album_{len(files)}_files",
+        file_ext=normalized_ext,
+        file_size=total_size,
+    )
+
+    kb = build_task_keyboard(normalized_ext)
+    await message.answer(
+        f"Альбом: {len(files)} файлов. Что сделать?",
+        reply_markup=kb.as_markup(),
+    )
+    await state.set_state(ConvertStates.waiting_for_task)
 
 
 @router.message(F.photo)
@@ -242,6 +336,13 @@ async def task_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     if task == "jpeg-to-avif":
         await state.set_state(ConvertStates.waiting_for_quality)
         await callback.message.answer("Выберите качество AVIF:", reply_markup=build_quality_keyboard().as_markup())
+        return
+
+    if task == "jpeg-compress":
+        await state.set_state(ConvertStates.waiting_for_quality)
+        await callback.message.answer(
+            "Выберите качество сжатия:", reply_markup=build_quality_keyboard().as_markup()
+        )
         return
 
     if task == "jpeg-to-ico":
@@ -339,6 +440,8 @@ async def back_handler(callback: CallbackQuery, state: FSMContext) -> None:
             label = "качество WebP"
         elif task == "jpeg-to-avif":
             label = "качество AVIF"
+        elif task == "jpeg-compress":
+            label = "качество сжатия"
         await callback.message.edit_text(f"Выберите {label}:", reply_markup=build_quality_keyboard().as_markup())
 
 
@@ -380,6 +483,13 @@ async def post_params(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer(f"Выберите качество {fmt}:", reply_markup=build_quality_keyboard().as_markup())
         return
 
+    if task == "jpeg-compress":
+        await state.set_state(ConvertStates.waiting_for_quality)
+        await callback.message.answer(
+            "Выберите качество сжатия:", reply_markup=build_quality_keyboard().as_markup()
+        )
+        return
+
     if task == "jpeg-to-pdf":
         await state.set_state(ConvertStates.waiting_for_pdf_mode)
         await callback.message.answer(
@@ -398,9 +508,14 @@ async def post_params(callback: CallbackQuery, state: FSMContext) -> None:
 async def perform_conversion(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
 
+    is_batch = bool(data.get("batch"))
     file_id = data.get("file_id")
     file_name = data.get("file_name")
-    if not file_id or not file_name:
+    if is_batch:
+        if not data.get("files"):
+            await message.answer("Не удалось получить файлы альбома. Попробуйте ещё раз.")
+            return
+    elif not file_id or not file_name:
         await message.answer("Не удалось получить данные файла. Попробуйте ещё раз.")
         return
 
@@ -423,6 +538,7 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
             "jpeg-to-ico": "JPG/PNG → ICO",
             "jpeg-to-webp": "JPG/PNG → WebP",
             "jpeg-to-avif": "JPG/PNG → AVIF",
+            "jpeg-compress": "JPG → сжать",
         }.get(task_id, task_id)
 
     def output_format(task_id: str, file_name_value: str) -> str:
@@ -436,6 +552,8 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
             return "WebP"
         if task_id == "jpeg-to-avif":
             return "AVIF"
+        if task_id == "jpeg-compress":
+            return "JPG"
         # Для ZIP входа результат часто тоже ZIP
         if Path(file_name_value).suffix.lower() == ".zip":
             return "ZIP"
@@ -492,13 +610,26 @@ async def perform_conversion(message: Message, state: FSMContext) -> None:
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_root = Path(tmp_dir)
-            input_path = temp_root / file_name
-            logger.info(f"Starting conversion for user {message.from_user.id if message.from_user else 'unknown'}: {file_name} -> {task}")
+            user_id = message.from_user.id if message.from_user else "unknown"
             try:
-                file = await bot.get_file(file_id)
-                await bot.download(file, destination=input_path)
+                if is_batch:
+                    files = data["files"]
+                    staging = temp_root / "album"
+                    staging.mkdir()
+                    logger.info(f"Starting album conversion for user {user_id}: {len(files)} files -> {task}")
+                    for f in files:
+                        tg_file = await bot.get_file(f["file_id"])
+                        await bot.download(tg_file, destination=staging / f["name"])
+                    input_path = temp_root / "album.zip"
+                    _zip_album_staging(staging, input_path)
+                    file_name = input_path.name
+                else:
+                    input_path = temp_root / file_name
+                    logger.info(f"Starting conversion for user {user_id}: {file_name} -> {task}")
+                    file = await bot.get_file(file_id)
+                    await bot.download(file, destination=input_path)
             except asyncio.TimeoutError as exc:
-                logger.error(f"Download timeout for user {message.from_user.id if message.from_user else 'unknown'}")
+                logger.error(f"Download timeout for user {user_id}")
                 raise RuntimeError(
                     "Превышен таймаут скачивания файла из Telegram. "
                     "Попробуйте ещё раз или отправьте файл меньшего размера."
