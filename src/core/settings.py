@@ -16,12 +16,14 @@ class Settings(BaseSettings):
     allowed_users: str | list[int] = Field(default_factory=list, alias="ALLOWED_USERS")
 
     # Limits
-    max_download_mb: int = 20
-    max_upload_mb: int = 50
+    max_download_mb: int = 100
+    max_upload_mb: int = 100
     convert_timeout_seconds: int = 240
 
     # Network (Telegram API / file download/upload)
     telegram_timeout_seconds: int = 300
+    telegram_api_server_url: str | None = None
+    telegram_api_is_local: bool = True
 
     # UX / Progress
     progress_update_seconds: int = 5
